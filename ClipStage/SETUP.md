@@ -167,6 +167,44 @@ isn't free for a large drawing. Left as-is for now — it's a real tradeoff,
 not a bug, and CodeRabbit itself didn't count it as actionable; worth
 revisiting if drawing ever feels laggy on a big layer.)
 
+## Import/open speed
+
+18. **Import no longer copies a Photos video twice** — `VideoTransferable`
+    (the PhotosPicker bridge) used to copy the picker's own temp export to
+    a longer-lived temp file, then `ProjectStore.importVideo` copied
+    *that* again into `Documents/Videos` — two full byte-for-byte copies
+    of what can be a very large file. Both are now `moveItem` instead of
+    `copyItem` for the Photos path specifically (`importVideo(...,
+    ownsSource: true)`), which on the same volume is a fast rename, not a
+    data copy. The Files-importer path still copies, correctly — that's
+    the user's own document elsewhere in Files/iCloud Drive and must
+    never be moved out from under them.
+19. **Thumbnail generation no longer blocks getting into the editor** —
+    import jumps straight into the editor without ever showing the grid
+    card the thumbnail is for (see fix 7 way above), so there was no
+    reason to make the user wait for `AVAssetImageGenerator` to decode a
+    frame before they could start editing. It now generates in the
+    background and patches into the saved project once ready (see
+    `ProjectStore.generateThumbnailInBackground`) — the placeholder icon
+    shows until then, same as it always did for a thumbnail-generation
+    failure.
+20. **`VideoComposer.buildComposition` loads AVFoundation metadata with
+    fewer round-trips** — video and audio tracks now load concurrently
+    (`async let`) instead of sequentially, and `naturalSize` +
+    `preferredTransform` batch into one `load(_:_:)` call instead of two.
+    This runs on every single edit and every project open (see
+    `EditorViewModel.reloadPreview`), so fewer round-trips is a real,
+    if modest, latency win each time.
+
+**What these don't fix:** if a video lives only in iCloud Photos (not
+downloaded to the device), PhotosPicker has to download the full-resolution
+original before handing it to us at all — that's Apple's own network
+transfer, entirely outside this app, and no code change here touches it.
+Likewise, a genuinely huge 4K/60fps file just has more bytes to move
+regardless of copy-vs-move. If import still feels slow after this, check
+whether the video is fully downloaded locally first (or picking directly
+from Files instead of Photos, if you know the file's already on-device).
+
 ## Setup
 
 Same as before: create a new **App** playground in Swift Playground

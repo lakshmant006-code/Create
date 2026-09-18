@@ -42,11 +42,21 @@ enum ProjectStore {
         videosDirectory.appending(path: filename)
     }
 
-    /// Copies a video the user just picked (Photos or Files) into the
-    /// sandbox, generates a thumbnail, and creates a fresh project pointed
-    /// at both. `temporaryURL` only needs to be valid for this call.
-    /// Rejects anything over `maxImportSizeBytes` up front, before copying.
-    static func importVideo(from temporaryURL: URL, name: String) async throws -> VideoProject {
+    /// Relocates a video the user just picked (Photos or Files) into the
+    /// sandbox and creates a fresh project pointed at it — the thumbnail
+    /// generates in the background afterward (see below) rather than
+    /// blocking this call, since import jumps straight into the editor
+    /// without ever showing the grid card the thumbnail is for.
+    /// `temporaryURL` only needs to be valid for this call. Rejects
+    /// anything over `maxImportSizeBytes` up front, before touching it.
+    ///
+    /// `ownsSource`: pass `true` only when `temporaryURL` is a disposable
+    /// file this call is the sole owner of (e.g. our own temp copy from
+    /// the Photos picker) — it's then *moved* into place, which on the
+    /// same volume is a fast rename instead of a full byte-for-byte copy,
+    /// unlike a user's original document from the Files importer, which
+    /// must never be moved/deleted out from under them.
+    static func importVideo(from temporaryURL: URL, name: String, ownsSource: Bool = false) async throws -> VideoProject {
         if let attributes = try? FileManager.default.attributesOfItem(atPath: temporaryURL.path),
            let sizeInBytes = attributes[.size] as? Int,
            sizeInBytes > maxImportSizeBytes {
@@ -58,17 +68,21 @@ enum ProjectStore {
         let destination = videosDirectory.appending(path: filename)
 
         do {
-            try FileManager.default.copyItem(at: temporaryURL, to: destination)
+            if ownsSource {
+                try FileManager.default.moveItem(at: temporaryURL, to: destination)
+            } else {
+                try FileManager.default.copyItem(at: temporaryURL, to: destination)
+            }
 
             let asset = AVURLAsset(url: destination)
             let durationSeconds = try await asset.load(.duration).seconds
 
-            var project = VideoProject(
+            let project = VideoProject(
                 name: name,
                 sourceFilename: filename,
                 duration: durationSeconds.isFinite ? durationSeconds : 0
             )
-            project.thumbnailFilename = await generateThumbnail(for: asset, baseFilename: filename)
+            generateThumbnailInBackground(for: project, asset: asset, baseFilename: filename)
             return project
         } catch {
             // Don't leave an orphaned copy in Documents/Videos if duration
@@ -78,6 +92,26 @@ enum ProjectStore {
             // filename to clean it up later.
             try? FileManager.default.removeItem(at: destination)
             throw error
+        }
+    }
+
+    /// Fires off thumbnail generation without making the caller wait for
+    /// it, then patches the finished filename into whatever's saved for
+    /// this project once it's ready. Safe even though the caller
+    /// (finishImport) saves this same project moments after importVideo
+    /// returns, before this finishes: that save's own loadProjects() runs
+    /// first regardless (thumbnail decode is slower than an array append +
+    /// small JSON write), so by the time this task's loadProjects() runs,
+    /// the project is already there to patch. In the unlikely case that
+    /// ordering ever flips, the project simply keeps its placeholder icon
+    /// — never lost data, just a missed thumbnail.
+    private static func generateThumbnailInBackground(for project: VideoProject, asset: AVURLAsset, baseFilename: String) {
+        Task {
+            guard let thumbnailFilename = await generateThumbnail(for: asset, baseFilename: baseFilename) else { return }
+            var projects = loadProjects()
+            guard let index = projects.firstIndex(where: { $0.id == project.id }) else { return }
+            projects[index].thumbnailFilename = thumbnailFilename
+            save(projects)
         }
     }
 

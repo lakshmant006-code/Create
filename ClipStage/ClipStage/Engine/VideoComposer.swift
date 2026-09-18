@@ -47,12 +47,19 @@ enum VideoComposer {
     ) async throws -> (composition: AVMutableComposition, videoComposition: AVMutableVideoComposition, sourceSize: CGSize) {
 
         let asset = AVURLAsset(url: sourceURL)
-        guard let sourceVideoTrack = try await asset.loadTracks(withMediaType: .video).first else {
+        // Video and audio tracks loaded concurrently (async let), and
+        // naturalSize/preferredTransform batched into one load(_:_:) call
+        // instead of two — this is called on every single edit (see
+        // EditorViewModel.reloadPreview) and every project open, so fewer
+        // round-trips through AVFoundation's asynchronous key-value
+        // loading noticeably cuts latency, especially on a large file.
+        async let videoTracks = asset.loadTracks(withMediaType: .video)
+        async let audioTracks = asset.loadTracks(withMediaType: .audio)
+        guard let sourceVideoTrack = try await videoTracks.first else {
             throw ComposerError.missingVideoTrack
         }
 
-        let naturalSize = try await sourceVideoTrack.load(.naturalSize)
-        let preferredTransform = try await sourceVideoTrack.load(.preferredTransform)
+        let (naturalSize, preferredTransform) = try await sourceVideoTrack.load(.naturalSize, .preferredTransform)
         let orientedSize = naturalSize.applying(preferredTransform)
         let sourceSize = CGSize(width: abs(orientedSize.width), height: abs(orientedSize.height))
 
@@ -83,7 +90,7 @@ enum VideoComposer {
         try compositionVideoTrack.insertTimeRange(trimRange, of: sourceVideoTrack, at: .zero)
         compositionVideoTrack.preferredTransform = preferredTransform
 
-        if let sourceAudioTrack = try await asset.loadTracks(withMediaType: .audio).first,
+        if let sourceAudioTrack = try await audioTracks.first,
            let compositionAudioTrack = composition.addMutableTrack(
                withMediaType: .audio,
                preferredTrackID: kCMPersistentTrackID_Invalid

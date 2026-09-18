@@ -136,7 +136,10 @@ struct ProjectListView: View {
                     throw ImportError.couldNotLoad
                 }
                 guard !Task.isCancelled else { return }
-                try await finishImport(from: transferable.url, name: defaultName())
+                // transferable.url is our own disposable temp file (see
+                // VideoTransferable) — safe to move into place instead of
+                // copying, unlike a Files-importer URL.
+                try await finishImport(from: transferable.url, name: defaultName(), ownsSource: true)
                 photosPickerItem = nil
             } catch {
                 guard !Task.isCancelled else { return }
@@ -182,15 +185,17 @@ struct ProjectListView: View {
     /// Imports the video, saves it into the project list, then jumps
     /// straight into the editor for it — no extra tap on the grid needed.
     @MainActor
-    private func finishImport(from url: URL, name: String) async throws {
-        let project = try await ProjectStore.importVideo(from: url, name: name)
-        // importVideo's copy + duration load + thumbnail generation can
-        // take a while, long enough for cancelImport() to have already
-        // cancelled this task and dismissed the "Importing…" overlay by
-        // the time it returns. Without this check, a successful-but-late
-        // result would still save the project and jump into the editor —
-        // right after the user explicitly cancelled and watched the
-        // overlay go away.
+    private func finishImport(from url: URL, name: String, ownsSource: Bool = false) async throws {
+        let project = try await ProjectStore.importVideo(from: url, name: name, ownsSource: ownsSource)
+        // A Photos import in particular (the underlying iCloud download,
+        // if the original isn't on-device yet) can take a while, long
+        // enough for cancelImport() to have already cancelled this task
+        // and dismissed the "Importing…" overlay by the time it returns.
+        // Without this check, a successful-but-late result would still
+        // save the project and jump into the editor — right after the
+        // user explicitly cancelled and watched the overlay go away.
+        // (Thumbnail generation no longer factors in here — it now runs
+        // in the background after this call already returns.)
         guard !Task.isCancelled else {
             ProjectStore.deleteProject(project)
             throw CancellationError()
@@ -290,9 +295,13 @@ private struct ProjectCard: View {
     }
 }
 
-/// Bridges a PhotosPicker video selection into a local file URL we can copy
-/// into the app sandbox. The `importing` closure runs while the received
-/// file is still valid, so it's copied immediately to a temp location.
+/// Bridges a PhotosPicker video selection into a local file URL we own.
+/// `received.file` is only valid inside this closure, so it has to be
+/// relocated somewhere longer-lived before returning — moved rather than
+/// copied, since it's already a disposable export PhotosPicker made just
+/// for us (the real asset in Photos is untouched either way), and moving
+/// is a fast rename instead of a full byte-for-byte duplicate of what can
+/// be a very large file.
 struct VideoTransferable: Transferable {
     let url: URL
 
@@ -300,9 +309,9 @@ struct VideoTransferable: Transferable {
         FileRepresentation(contentType: .movie) { exported in
             SentTransferredFile(exported.url)
         } importing: { received in
-            let copy = FileManager.default.temporaryDirectory.appending(path: "picked-\(UUID().uuidString).mov")
-            try FileManager.default.copyItem(at: received.file, to: copy)
-            return Self(url: copy)
+            let destination = FileManager.default.temporaryDirectory.appending(path: "picked-\(UUID().uuidString).mov")
+            try FileManager.default.moveItem(at: received.file, to: destination)
+            return Self(url: destination)
         }
     }
 }
