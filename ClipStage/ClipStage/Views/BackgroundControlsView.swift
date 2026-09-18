@@ -197,7 +197,7 @@ struct BackgroundControlsView: View {
                 Image(systemName: "chevron.up")
             }
             .buttonStyle(.plain)
-            .disabled(viewModel.project.drawingLayers.first?.id == layer.id)
+            .disabled(viewModel.project.drawingLayers.last?.id == layer.id)
 
             Button {
                 viewModel.moveDrawingLayer(layer.id, up: false)
@@ -205,7 +205,7 @@ struct BackgroundControlsView: View {
                 Image(systemName: "chevron.down")
             }
             .buttonStyle(.plain)
-            .disabled(viewModel.project.drawingLayers.last?.id == layer.id)
+            .disabled(viewModel.project.drawingLayers.first?.id == layer.id)
 
             Button(role: .destructive) {
                 viewModel.deleteDrawingLayer(layer.id)

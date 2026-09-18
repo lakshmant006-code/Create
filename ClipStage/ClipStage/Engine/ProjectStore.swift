@@ -56,18 +56,29 @@ enum ProjectStore {
         let ext = temporaryURL.pathExtension.isEmpty ? "mov" : temporaryURL.pathExtension
         let filename = "\(UUID().uuidString).\(ext)"
         let destination = videosDirectory.appending(path: filename)
-        try FileManager.default.copyItem(at: temporaryURL, to: destination)
 
-        let asset = AVURLAsset(url: destination)
-        let durationSeconds = try await asset.load(.duration).seconds
+        do {
+            try FileManager.default.copyItem(at: temporaryURL, to: destination)
 
-        var project = VideoProject(
-            name: name,
-            sourceFilename: filename,
-            duration: durationSeconds.isFinite ? durationSeconds : 0
-        )
-        project.thumbnailFilename = await generateThumbnail(for: asset, baseFilename: filename)
-        return project
+            let asset = AVURLAsset(url: destination)
+            let durationSeconds = try await asset.load(.duration).seconds
+
+            var project = VideoProject(
+                name: name,
+                sourceFilename: filename,
+                duration: durationSeconds.isFinite ? durationSeconds : 0
+            )
+            project.thumbnailFilename = await generateThumbnail(for: asset, baseFilename: filename)
+            return project
+        } catch {
+            // Don't leave an orphaned copy in Documents/Videos if duration
+            // loading fails after the copy succeeded — repeated failed
+            // imports (an unsupported/damaged file) would otherwise quietly
+            // eat storage forever, since nothing else ever references this
+            // filename to clean it up later.
+            try? FileManager.default.removeItem(at: destination)
+            throw error
+        }
     }
 
     /// Grabs the frame at t=0 and saves it as a JPEG next to the video.
@@ -94,14 +105,28 @@ enum ProjectStore {
         return thumbFilename
     }
 
+    /// Returns `[]` when there's genuinely no saved project list yet (first
+    /// launch). If `projects.json` exists but fails to decode, that's a
+    /// different situation — silently treating it the same as "no
+    /// projects" would let the very next `save()` (e.g. from importing one
+    /// new video) overwrite the file with just that one project, discarding
+    /// whatever was in it for good. So a corrupted file is preserved as a
+    /// `.corrupt` backup instead of being left in place to get clobbered.
     static func loadProjects() -> [VideoProject] {
         guard let data = try? Data(contentsOf: projectsFileURL) else { return [] }
-        return (try? JSONDecoder().decode([VideoProject].self, from: data)) ?? []
+        if let projects = try? JSONDecoder().decode([VideoProject].self, from: data) {
+            return projects
+        }
+        let backupURL = projectsFileURL.appendingPathExtension("corrupt")
+        try? FileManager.default.removeItem(at: backupURL)
+        try? FileManager.default.copyItem(at: projectsFileURL, to: backupURL)
+        return []
     }
 
-    static func save(_ projects: [VideoProject]) {
-        guard let data = try? JSONEncoder().encode(projects) else { return }
-        try? data.write(to: projectsFileURL, options: .atomic)
+    @discardableResult
+    static func save(_ projects: [VideoProject]) -> Bool {
+        guard let data = try? JSONEncoder().encode(projects) else { return false }
+        return (try? data.write(to: projectsFileURL, options: .atomic)) != nil
     }
 
     static func deleteProject(_ project: VideoProject) {

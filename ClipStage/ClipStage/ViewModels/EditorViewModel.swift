@@ -19,6 +19,11 @@ final class EditorViewModel {
     var isPlaying = false
     var duration: Double = 1
     var selectedKeyframeID: UUID?
+    /// The source video's true (orientation-corrected) size, filled in
+    /// once the first preview build loads it. Used by EditorView to size
+    /// the `.original` aspect ratio's preview box correctly instead of
+    /// guessing 16:9 — see EditorView.contentAspectRatio.
+    var sourceNaturalSize = CGSize(width: 16, height: 9)
 
     var isExporting = false
     var exportProgress: Double = 0
@@ -63,13 +68,29 @@ final class EditorViewModel {
 
     /// Rebuilds the composited preview after an edit (background, padding,
     /// zoom keyframes, trim, aspect ratio) so the preview always matches
-    /// what export will produce.
+    /// what export will produce. Every edit calls this — background,
+    /// padding, trim, zoom, drawing — so it captures and restores the
+    /// playhead (and resumes playback if it was running) instead of
+    /// letting `replaceCurrentItem` silently reset a fresh AVPlayerItem to
+    /// time zero on every single edit.
     func reloadPreview() async {
         do {
-            let item = try await VideoComposer.buildPlayerItem(for: project, sourceURL: sourceURL)
+            let resumeTime = min(max(currentTime, 0), project.trimmedDuration)
+            let wasPlaying = isPlaying
+            let (item, sourceSize) = try await VideoComposer.buildPlayerItem(for: project, sourceURL: sourceURL)
             attachTimeObserver(to: item)
             player.replaceCurrentItem(with: item)
             duration = project.trimmedDuration
+            sourceNaturalSize = sourceSize
+            _ = await player.seek(
+                to: CMTime(seconds: resumeTime, preferredTimescale: 600),
+                toleranceBefore: .zero,
+                toleranceAfter: .zero
+            )
+            currentTime = resumeTime
+            if wasPlaying {
+                player.play()
+            }
             errorMessage = nil
         } catch {
             errorMessage = "Couldn't build preview: \(error.localizedDescription)"
@@ -98,15 +119,16 @@ final class EditorViewModel {
             isPlaying = false
             return
         }
+        isPlaying = true
         if hasPendingLayerChanges {
-            Task {
-                await syncPendingLayerChanges()
-                player.play()
-            }
+            // reloadPreview() (via syncPendingLayerChanges) reads
+            // `isPlaying`, already true above, and resumes playback
+            // itself once the rebuilt item is seeked back to the current
+            // playhead — no separate player.play() needed here too.
+            Task { await syncPendingLayerChanges() }
         } else {
             player.play()
         }
-        isPlaying = true
     }
 
     func seek(to time: Double) {
@@ -199,17 +221,18 @@ final class EditorViewModel {
         project.drawingLayers[index].name = name
     }
 
-    /// Moves a layer one slot toward the front (`up: true`) or back of
-    /// `drawingLayers`. Order doesn't affect rendering today (every
-    /// visible layer's ink is just drawn in array order, and strokes
-    /// rarely overlap enough for stacking order to matter) — it's here so
-    /// the layers panel has a stable, user-controlled sort, the same way
-    /// Procreate's layer list does. No reload needed for the same reason.
+    /// Moves a layer one slot toward the top (`up: true`) or bottom of the
+    /// visual stack. Both `DrawingLayersOverlayView`'s `ZStack` and
+    /// `VideoComposer`'s `addSublayer` calls render `drawingLayers` in
+    /// array order with *later* entries on top — so "up" (toward the
+    /// front, like every layer panel: Procreate, Photoshop, Keynote) means
+    /// moving to a *higher* array index, not a lower one.
     func moveDrawingLayer(_ id: UUID, up: Bool) {
         guard let index = project.drawingLayers.firstIndex(where: { $0.id == id }) else { return }
-        let newIndex = up ? index - 1 : index + 1
+        let newIndex = up ? index + 1 : index - 1
         guard project.drawingLayers.indices.contains(newIndex) else { return }
         project.drawingLayers.swapAt(index, newIndex)
+        Task { await reloadPreview() }
     }
 
     /// Bound to the active layer's time-range sliders — like
@@ -259,7 +282,10 @@ final class EditorViewModel {
         } else {
             all.append(project)
         }
-        ProjectStore.save(all)
+        guard ProjectStore.save(all) else {
+            errorMessage = "Couldn't save — check available storage and try again."
+            return
+        }
         lastSavedAt = Date()
     }
 

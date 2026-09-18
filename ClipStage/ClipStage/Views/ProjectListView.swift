@@ -184,6 +184,17 @@ struct ProjectListView: View {
     @MainActor
     private func finishImport(from url: URL, name: String) async throws {
         let project = try await ProjectStore.importVideo(from: url, name: name)
+        // importVideo's copy + duration load + thumbnail generation can
+        // take a while, long enough for cancelImport() to have already
+        // cancelled this task and dismissed the "Importing…" overlay by
+        // the time it returns. Without this check, a successful-but-late
+        // result would still save the project and jump into the editor —
+        // right after the user explicitly cancelled and watched the
+        // overlay go away.
+        guard !Task.isCancelled else {
+            ProjectStore.deleteProject(project)
+            throw CancellationError()
+        }
         var updated = ProjectStore.loadProjects()
         updated.append(project)
         ProjectStore.save(updated)

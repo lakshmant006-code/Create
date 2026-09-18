@@ -127,7 +127,11 @@ enum AspectRatioPreset: String, Codable, CaseIterable, Identifiable, Hashable {
     func renderSize(sourceNaturalSize: CGSize) -> CGSize {
         switch self {
         case .original:
-            let longEdge: CGFloat = 1920
+            // min(), not a flat 1920 — a source already smaller than that
+            // (a modest screen recording, say 640x480) would otherwise get
+            // upscaled 3x for zero quality benefit, just wasted encode
+            // time and output size.
+            let longEdge = min(max(sourceNaturalSize.width, sourceNaturalSize.height), 1920)
             let ratio = sourceNaturalSize.width / max(sourceNaturalSize.height, 1)
             if sourceNaturalSize.width >= sourceNaturalSize.height {
                 return CGSize(width: longEdge, height: (longEdge / max(ratio, 0.01)).rounded())

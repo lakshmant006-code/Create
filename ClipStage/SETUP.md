@@ -116,6 +116,57 @@ confirm the composite in preview/export drops it; check that leaving Draw
 Mode (or hitting Play right after drawing) doesn't stutter or drop the
 just-drawn ink from the reload.
 
+## Fixes from CodeRabbit's automated review (PR #1)
+
+10. **Orphaned video files on failed import** — `ProjectStore.importVideo`
+    now removes the copy in `Documents/Videos` if duration loading fails
+    afterward, instead of leaking it forever on every failed import.
+11. **Corrupted `projects.json` could silently wipe your project list** —
+    `loadProjects()` used to return `[]` on any decode failure, and the
+    next `save()` (e.g. importing one new video) would overwrite the file
+    with just that one project, permanently discarding the rest. A
+    decode failure now backs up the unreadable file as `.corrupt` instead
+    and `save()` reports write failures back to callers (`EditorViewModel
+    .save()` now sets `errorMessage` instead of silently "succeeding").
+12. **`paddingFraction` clamped in `VideoComposer`** — the slider only
+    ever writes 0...0.35, but nothing validated a persisted value outside
+    that range, which could make the canvas's `availableSize` go
+    negative and break the whole layer tree's geometry.
+13. **`.original` aspect ratio no longer upscales small sources** — it
+    always rendered at a fixed 1920px long edge; a smaller source (e.g. a
+    640x480 recording) was getting blown up 3x for no quality benefit.
+    Now caps at `min(sourceLongEdge, 1920)`.
+14. **Fixed the Layers panel's up/down buttons being backwards** — both
+    the editing overlay's `ZStack` and `VideoComposer`'s sublayer order
+    render *later* array entries on top, so "move up" needs to move a
+    layer to a *higher* index, not lower. It was doing the opposite,
+    silently moving a layer behind its neighbor instead of in front.
+15. **Preview no longer jumps to 0:00 on every edit** — `reloadPreview()`
+    (called after *every* edit — background, padding, trim, zoom, draw)
+    was replacing the AVPlayerItem without seeking back to the previous
+    playhead. Now it captures the time (and whether it was playing)
+    first, and restores both after the rebuild.
+16. **`.original` aspect ratio now sizes the preview/draw canvas
+    correctly for non-16:9 video** — this used to hardcode a 16:9
+    fallback "since it's cosmetic only," which stopped being true once
+    the Draw feature started sizing its on-screen canvas from the same
+    value: a portrait or 4:3 source would shape the drawing canvas wrong,
+    landing ink in the wrong place relative to the correctly-shaped
+    export. `VideoComposer` now returns the asset's real size, and
+    `EditorViewModel.sourceNaturalSize` carries it to the view.
+17. **Cancelling an import right as it finishes no longer navigates you
+    into the editor anyway** — `finishImport` didn't recheck
+    `Task.isCancelled` after `importVideo` returned, so a
+    successful-but-late result could still save the project and open it,
+    right after the user watched the "Importing…" overlay dismiss.
+
+(CodeRabbit also flagged one **nitpick**, explicitly separate from the 8
+actionable findings above: `DrawingCanvasView` re-serializes the active
+layer's full `PKDrawing` on every single ink update while drawing, which
+isn't free for a large drawing. Left as-is for now — it's a real tradeoff,
+not a bug, and CodeRabbit itself didn't count it as actionable; worth
+revisiting if drawing ever feels laggy on a big layer.)
+
 ## Setup
 
 Same as before: create a new **App** playground in Swift Playground

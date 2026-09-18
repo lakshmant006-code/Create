@@ -110,12 +110,17 @@ struct EditorView: View {
         }
     }
 
-    /// Approximates the canvas shape for sizing the SwiftUI preview frame.
-    /// `.original` falls back to 16:9 here since the *real* source size
-    /// isn't known until VideoComposer loads the asset — cosmetic only,
-    /// export always uses the true value.
+    /// Sizes the SwiftUI preview frame to match the real canvas shape.
+    /// `viewModel.sourceNaturalSize` defaults to 16:9 until the first
+    /// preview build loads the asset's true size, then stays accurate —
+    /// this used to be hardcoded to 16:9 for `.original`, which wasn't
+    /// just cosmetic once the Draw feature's overlay started sizing its
+    /// canvas from this same aspect ratio: a non-16:9 source (portrait
+    /// screen recordings, 4:3, anything) would shape the on-screen drawing
+    /// canvas wrong, so ink could land in the wrong place relative to the
+    /// correctly-shaped export.
     private var contentAspectRatio: CGFloat {
-        let size = viewModel.project.aspectRatio.renderSize(sourceNaturalSize: CGSize(width: 16, height: 9))
+        let size = viewModel.project.aspectRatio.renderSize(sourceNaturalSize: viewModel.sourceNaturalSize)
         return size.width / size.height
     }
 }

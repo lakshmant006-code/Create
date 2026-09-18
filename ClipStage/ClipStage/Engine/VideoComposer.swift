@@ -44,7 +44,7 @@ enum VideoComposer {
     static func buildComposition(
         for project: VideoProject,
         sourceURL: URL
-    ) async throws -> (composition: AVMutableComposition, videoComposition: AVMutableVideoComposition) {
+    ) async throws -> (composition: AVMutableComposition, videoComposition: AVMutableVideoComposition, sourceSize: CGSize) {
 
         let asset = AVURLAsset(url: sourceURL)
         guard let sourceVideoTrack = try await asset.loadTracks(withMediaType: .video).first else {
@@ -94,7 +94,12 @@ enum VideoComposer {
         // --- Canvas geometry ---
         let renderSize = project.aspectRatio.renderSize(sourceNaturalSize: sourceSize)
         let shorterEdge = min(renderSize.width, renderSize.height)
-        let padding = shorterEdge * CGFloat(project.paddingFraction)
+        // Clamped defensively: the slider only ever writes 0...0.35, but a
+        // persisted value outside that range (hand-edited project.json, a
+        // future bug) would otherwise make availableSize below zero or
+        // negative, breaking fitScale/contentSize/shadowLayer.frame.
+        let clampedPaddingFraction = min(max(project.paddingFraction, 0), 0.35)
+        let padding = shorterEdge * CGFloat(clampedPaddingFraction)
 
         let availableSize = CGSize(width: renderSize.width - padding * 2, height: renderSize.height - padding * 2)
         let fitScale = min(availableSize.width / sourceSize.width, availableSize.height / sourceSize.height)
@@ -206,16 +211,22 @@ enum VideoComposer {
 
         videoComposition.instructions = [instruction]
 
-        return (composition, videoComposition)
+        return (composition, videoComposition, sourceSize)
     }
 
     /// Builds a player item for live, scrubbable preview — same pipeline as
-    /// export, so what you see is what you get.
-    static func buildPlayerItem(for project: VideoProject, sourceURL: URL) async throws -> AVPlayerItem {
-        let (composition, videoComposition) = try await buildComposition(for: project, sourceURL: sourceURL)
+    /// export, so what you see is what you get. Also returns the source's
+    /// true (orientation-corrected) size, so callers sizing a `.original`
+    /// preview don't have to guess an aspect ratio — see
+    /// EditorViewModel.sourceNaturalSize.
+    static func buildPlayerItem(
+        for project: VideoProject,
+        sourceURL: URL
+    ) async throws -> (item: AVPlayerItem, sourceSize: CGSize) {
+        let (composition, videoComposition, sourceSize) = try await buildComposition(for: project, sourceURL: sourceURL)
         let item = AVPlayerItem(asset: composition)
         item.videoComposition = videoComposition
-        return item
+        return (item, sourceSize)
     }
 
     static func export(
@@ -225,7 +236,7 @@ enum VideoComposer {
         preset: String = AVAssetExportPresetHighestQuality,
         progress: @escaping (Double) -> Void
     ) async throws {
-        let (composition, videoComposition) = try await buildComposition(for: project, sourceURL: sourceURL)
+        let (composition, videoComposition, _) = try await buildComposition(for: project, sourceURL: sourceURL)
 
         guard let exportSession = AVAssetExportSession(asset: composition, presetName: preset) else {
             throw ComposerError.missingVideoTrack
