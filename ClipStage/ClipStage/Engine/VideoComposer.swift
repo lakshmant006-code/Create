@@ -205,20 +205,24 @@ enum VideoComposer {
         )
 
         // iOS 26 replaces the old AVMutable* composition classes with
-        // Sendable value-type Configuration structs — same shape, same
-        // property names, just structs instead of classes.
+        // Sendable value-type Configuration structs. The Configuration is
+        // just a blueprint, though — .layerInstructions/.instructions still
+        // want the actual instruction objects, built from their
+        // Configuration via the matching init(configuration:).
         var layerInstructionConfiguration = AVVideoCompositionLayerInstruction.Configuration(assetTrack: compositionVideoTrack)
         layerInstructionConfiguration.setTransform(preferredTransform, at: .zero)
+        let layerInstruction = AVVideoCompositionLayerInstruction(configuration: layerInstructionConfiguration)
 
         var instructionConfiguration = AVVideoCompositionInstruction.Configuration()
         instructionConfiguration.timeRange = CMTimeRange(start: .zero, duration: trimRange.duration)
-        instructionConfiguration.layerInstructions = [layerInstructionConfiguration]
+        instructionConfiguration.layerInstructions = [layerInstruction]
+        let instruction = AVVideoCompositionInstruction(configuration: instructionConfiguration)
 
         var videoCompositionConfiguration = AVVideoComposition.Configuration()
         videoCompositionConfiguration.renderSize = renderSize
         videoCompositionConfiguration.frameDuration = CMTime(value: 1, timescale: 30)
         videoCompositionConfiguration.animationTool = animationTool
-        videoCompositionConfiguration.instructions = [instructionConfiguration]
+        videoCompositionConfiguration.instructions = [instruction]
 
         let videoComposition = AVVideoComposition(configuration: videoCompositionConfiguration)
 
