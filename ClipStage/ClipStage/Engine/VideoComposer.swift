@@ -224,7 +224,11 @@ enum VideoComposer {
         videoCompositionConfiguration.animationTool = animationTool
         videoCompositionConfiguration.instructions = [instruction]
 
-        let videoComposition = AVVideoComposition(configuration: videoCompositionConfiguration)
+        // Resolving a Configuration into the real AVVideoComposition is
+        // async throws on iOS 26 (unlike the two smaller instruction
+        // objects above) — it can fail, e.g. if the composition graph it
+        // describes turns out to be invalid.
+        let videoComposition = try await AVVideoComposition(configuration: videoCompositionConfiguration)
 
         return (composition, videoComposition, sourceSize)
     }
