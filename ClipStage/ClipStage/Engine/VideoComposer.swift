@@ -44,7 +44,7 @@ enum VideoComposer {
     static func buildComposition(
         for project: VideoProject,
         sourceURL: URL
-    ) async throws -> (composition: AVMutableComposition, videoComposition: AVMutableVideoComposition, sourceSize: CGSize) {
+    ) async throws -> (composition: AVMutableComposition, videoComposition: AVVideoComposition, sourceSize: CGSize) {
 
         let asset = AVURLAsset(url: sourceURL)
         // Video and audio tracks loaded concurrently (async let), and
@@ -204,19 +204,23 @@ enum VideoComposer {
             in: parentLayer
         )
 
-        let videoComposition = AVMutableVideoComposition()
-        videoComposition.renderSize = renderSize
-        videoComposition.frameDuration = CMTime(value: 1, timescale: 30)
-        videoComposition.animationTool = animationTool
+        // iOS 26 replaces the old AVMutable* composition classes with
+        // Sendable value-type Configuration structs — same shape, same
+        // property names, just structs instead of classes.
+        var layerInstructionConfiguration = AVVideoCompositionLayerInstruction.Configuration(assetTrack: compositionVideoTrack)
+        layerInstructionConfiguration.setTransform(preferredTransform, at: .zero)
 
-        let instruction = AVMutableVideoCompositionInstruction()
-        instruction.timeRange = CMTimeRange(start: .zero, duration: trimRange.duration)
+        var instructionConfiguration = AVVideoCompositionInstruction.Configuration()
+        instructionConfiguration.timeRange = CMTimeRange(start: .zero, duration: trimRange.duration)
+        instructionConfiguration.layerInstructions = [layerInstructionConfiguration]
 
-        let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: compositionVideoTrack)
-        layerInstruction.setTransform(preferredTransform, at: .zero)
-        instruction.layerInstructions = [layerInstruction]
+        var videoCompositionConfiguration = AVVideoComposition.Configuration()
+        videoCompositionConfiguration.renderSize = renderSize
+        videoCompositionConfiguration.frameDuration = CMTime(value: 1, timescale: 30)
+        videoCompositionConfiguration.animationTool = animationTool
+        videoCompositionConfiguration.instructions = [instructionConfiguration]
 
-        videoComposition.instructions = [instruction]
+        let videoComposition = AVVideoComposition(configuration: videoCompositionConfiguration)
 
         return (composition, videoComposition, sourceSize)
     }
@@ -249,30 +253,25 @@ enum VideoComposer {
             throw ComposerError.missingVideoTrack
         }
         exportSession.videoComposition = videoComposition
-        exportSession.outputURL = outputURL
-        exportSession.outputFileType = .mp4
         exportSession.shouldOptimizeForNetworkUse = true
 
         if FileManager.default.fileExists(atPath: outputURL.path) {
             try? FileManager.default.removeItem(at: outputURL)
         }
 
+        // iOS 18+ replaces the exportAsynchronously(completionHandler:) +
+        // polling .status/.progress pattern (which also triggered a
+        // non-Sendable-capture warning on exportSession) with a proper
+        // async throws call plus an AsyncSequence of states for progress.
         let progressTask = Task {
-            while exportSession.status == .waiting || exportSession.status == .exporting {
-                progress(Double(exportSession.progress))
-                try? await Task.sleep(nanoseconds: 200_000_000)
-            }
-        }
-
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            exportSession.exportAsynchronously {
-                if exportSession.status == .completed {
-                    continuation.resume(returning: ())
-                } else {
-                    continuation.resume(throwing: exportSession.error ?? ComposerError.missingVideoTrack)
+            for try await state in exportSession.states(updateInterval: 0.2) {
+                if case .exporting(let sessionProgress) = state {
+                    progress(sessionProgress.fractionCompleted)
                 }
             }
         }
+
+        try await exportSession.export(to: outputURL, as: .mp4)
 
         progressTask.cancel()
         progress(1)
