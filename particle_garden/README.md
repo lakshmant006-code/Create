@@ -19,6 +19,12 @@ Each attached leaf is static until release. Released leaves are independent part
 
 Matched to the reference recording: everything is drawn as axis-aligned 4 px blocks snapped to a grid (so sway and falling leaves step pixel by pixel). Canopies are clumpy, lobed and five-tone shaded (light from the upper left, dark toward the interior), with ~4-5k leaves per tree bound to twig tips. Trunks are dark, chunky and flared at the base, with twigs outside the canopy hidden. Petals and leaves are 1-2 block sprites (maple leaves flip to a plus shape when face-on), and landed leaves form flat piles under each tree. Ground line and labels were removed. Block size is the `PX` constant.
 
+## Controls (from the reference video)
+
+- **Weather** toggle with **Breezy / Storm**: when on, a preset drives wind speed, gusts, gravity and leaf release (wind and gust sliders lock); when off, your slider values come back.
+- **Direction** Left / Right: flips the wind field, so trees lean, leaves blow and the Gust button pushes the other way.
+- **Wind speed** (Calm to Storm) and **Gusts** (Off to Strong gusts): gusts fire automatically at random intervals, more often and stronger as the slider rises. The Gust button / Space still fire a manual one.
+
 ## Production upgrades
 
 - Add spatial noise for coherent gusts, rather than the present low-frequency sinusoidal field.
